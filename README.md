@@ -1,6 +1,8 @@
 # GuildedChatExporter
 Exports your dearest chats from Guilded to a file, along with downloading all attachments from said channel.
 
+https://colab.research.google.com/drive/1IfJnB3LWPMb55nRL7bjbulOKTHxPEvHT?usp=sharing
+
 Currently being done in google colab and is unfortunately made with AI, standalone/desktop versions maybe eventually
 
 # how to use rn:
