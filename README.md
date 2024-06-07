@@ -13,7 +13,7 @@ Currently being done in google colab and is unfortunately made with AI, standalo
 - Run the cells in colab using the top left button, do the same with the next ones to link your Google Drive (ignore the Check Server one for now), fetch all messages in the server, save the chat to a file, and then save attachments
 - copy off your exported files from guildedchatexporter on your googledrive and it should be good to go
 
-  ![image](https://github.com/Fatih120/GuildedChatExporter/assets/18276369/dc41074b-32fa-42c8-97e2-a874409120fd)
+![firefox_2024_0606-205534](https://github.com/Fatih120/GuildedChatExporter/assets/18276369/d99f675c-a0e8-44ea-9a16-a9cf3826b59f)
 
 
 ## todo
