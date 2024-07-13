@@ -1,28 +1,21 @@
 # GuildedChatExporter
-Exports your dearest chats from Guilded to a file, along with downloading all attachments from said channel.
+Exports your dearest chats from Guilded to a file, along with downloading all attachments from said channels.
 
-[Open in Google Colab RIGHT NOW
-](https://colab.research.google.com/github/Fatih120/GuildedChatExporter/blob/main/guildedchatexporter.ipynb
-)
-Currently being done in google colab and is unfortunately made with AI, standalone/desktop versions maybe eventually
+Currently exports all text/voice/stream channels with 70% accuracy, DMs, emoji, media of all sorts, and a bunch of raw JSONs for preservation and future data entry.
 
-# how to use rn:
-- make a bot for your server, get an auth token for it and paste this into the API_KEY field
-- right click the channel you want to archive and click "copy channel id", paste this into the CHANNEL_ID field
-  - make sure Settings > Advanced > Developer Mode is on if you don't see the command
-  - alternatively copy the channel link, the channel ID is https://www.guilded.gg/<name>/groups/<groupid>/channels/<THIS-LONG-FIELD-HERE>
-- Run the cells in colab using the top left button, do the same with the next ones to link your Google Drive (ignore the Check Server one for now), fetch all messages in the server, save the chat to a file, and then save attachments
-- copy off your exported files from guildedchatexporter on your googledrive and it should be good to go
+[Open in Google Colab RIGHT NOW](https://colab.research.google.com/github/Fatih120/GuildedChatExporter/blob/main/guildedchatexporter2.ipynb)
 
-![image](https://github.com/Fatih120/GuildedChatExporter/assets/18276369/acb6a3d9-2da3-4a54-86c1-9378155e38c7)
+Currently being done in google colab and is unfortunately made with AI, standalone/desktop versions probably won't happen with the time constraints since I've poured so much sweat and blood trying to get this together and it is a mess. After Roblox logins take effect I will no long er be interested in Guilded.
+
+# How to use
+
+Just follow the instructions in the Colab. To do each step, click on the play button on the top left. Go in order and check instructions (the first cell asks you to pick a server). I'm not sure if you can copy this over to a non-google service, I'm sorry FOSS lovers. At the very least, I have tested this on Colab successfully and you can probably get this working locally.
+
+![image](https://github.com/user-attachments/assets/f9dc3036-c39d-42bf-9d0c-44a342bd1ab2)
 
 
-## todo
-- ~~handling of those weird ? url queries and~~ possible renaming of attachments
-- ~~HTML exporter like in https://github.com/nulldg/DiscordChatExporterPlus~~ wip!
-- do this automatically for a whole group/server
-- fetch user roles and colours ~~and pfps and fix names~~
-- system notifications
+### todo
+idk its in the thing and idk if they'll get done (aside from downloading forum media and other stuff, max priority until nukage)
 
 # Contact and Support
 
