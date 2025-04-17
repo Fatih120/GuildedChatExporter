@@ -3,7 +3,7 @@ Exports your dearest chats from Guilded to a file, along with downloading all at
 
 Currently exports all text/voice/stream channels with 70% accuracy, DMs, emoji, media of all sorts, and a bunch of raw JSONs for preservation and future data entry.
 
-[Open in Google Colab RIGHT NOW](https://colab.research.google.com/github/Fatih120/GuildedChatExporter/blob/main/guildedchatexporter2.ipynb)
+[Open in Google Colab RIGHT NOW](https://colab.research.google.com/github/Fatih120/GuildedChatExporter/blob/main/guildedchatexporter2.1.ipynb)
 
 Currently being done in google colab and is unfortunately made with AI, standalone/desktop versions probably won't happen with the time constraints since I've poured so much sweat and blood trying to get this together and it is a mess. After Roblox logins take effect I will no long er be interested in Guilded.
 
