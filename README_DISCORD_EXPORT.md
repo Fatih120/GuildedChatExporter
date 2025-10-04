@@ -1,13 +1,17 @@
-# GuildedChatExporter - Discord Takeout Format
+# GuildedChatExporter - Multiple Export Formats
 
-Export Guilded servers to Discord takeout format for Spacebar import.
+Export Guilded servers in Discord takeout format or raw JSON before the platform shutdown.
 
 ## Important Notice
 
-**Guilded.gg is shutting down on January 1, 2026.** This exporter helps you preserve your Guilded server data in a format compatible with Spacebar.
+**Guilded.gg is shutting down on January 1, 2026.** This exporter helps you preserve your Guilded server data in multiple formats.
 
-## Features
+## Export Formats
 
+### 1. Discord Takeout Format
+Converts Guilded data to Discord-compatible format for potential Spacebar import.
+
+**Features:**
 - ✅ Exports to Discord takeout folder structure
 - ✅ Full JSON message objects (not CSV)
 - ✅ Downloads all attachments for preservation
@@ -16,12 +20,23 @@ Export Guilded servers to Discord takeout format for Spacebar import.
 - ✅ Exports reactions (if available)
 - ✅ Marks pinned messages
 - ✅ Converts permissions to Discord bitmasks
-- ✅ Ready for Spacebar import
+
+### 2. Raw JSON Format (Recommended)
+Saves raw Guilded API responses with complete message history using cursor rewinding.
+
+**Features:**
+- ✅ Preserves all Guilded-specific fields
+- ✅ Complete message history via cursor-based pagination
+- ✅ No data loss from conversion
+- ✅ Suitable for custom importers
+- ✅ All metadata preserved exactly as received from Guilded
 
 ## Requirements
 
 - Python 3.7+
 - `requests` library
+- `python-socketio` library (for raw export)
+- `aiohttp` library (for raw export)
 - Guilded account with access to the server you want to export
 
 ## Installation
@@ -32,7 +47,7 @@ git clone https://github.com/erkinalp/GuildedChatExporter.git
 cd GuildedChatExporter
 
 # Install dependencies
-pip install requests
+pip install requests python-socketio aiohttp
 ```
 
 ## Usage
@@ -44,9 +59,14 @@ python3 export.py
 ```
 
 Follow the prompts to:
-1. Enter your Guilded authentication token
-2. Select a server to export
-3. Confirm and start the export
+1. Choose export format (Discord Takeout or Raw JSON)
+2. Enter your Guilded authentication token
+3. Select a server to export
+4. Confirm and start the export
+
+**Which format should I choose?**
+- Choose **Discord Takeout** if you plan to import directly into Spacebar
+- Choose **Raw JSON** to preserve all data and write a custom importer later (recommended by Spacebar developers)
 
 ### Getting Your Authentication Token
 
@@ -61,25 +81,44 @@ Follow the prompts to:
 
 ### Programmatic Usage
 
+**Discord Format:**
 ```python
 from guilded_to_discord_exporter import GuildedToDiscordExporter
 
-# Initialize exporter
 exporter = GuildedToDiscordExporter(
     auth_token="your-hmac-signed-session-token",
-    output_dir="./my-export"
+    output_dir="./my-export",
+    export_format="discord"
 )
 
-# Export a specific server
 exporter.export_all(
     server_id="your-server-id",
     server_name="Your Server Name"
 )
 ```
 
+**Raw JSON Format:**
+```python
+import asyncio
+from guilded_websocket_exporter import GuildedWebSocketExporter
+
+async def export():
+    exporter = GuildedWebSocketExporter(
+        auth_token="your-hmac-signed-session-token",
+        output_dir="./my-export"
+    )
+    
+    await exporter.export_server_full(
+        server_id="your-server-id",
+        server_name="Your Server Name"
+    )
+
+asyncio.run(export())
+```
+
 ## Export Structure
 
-The exporter creates a Discord-compatible folder structure:
+### Discord Takeout Format
 
 ```
 guilded-export/
@@ -96,6 +135,22 @@ guilded-export/
 └── servers/{guild_id}/
     ├── guild.json
     └── audit-log.json
+```
+
+### Raw JSON Format
+
+```
+guilded-export/
+└── raw_websocket/
+    ├── README.txt
+    ├── user.json
+    ├── server_{server_id}_info.json
+    ├── server_{server_id}_channels.json
+    ├── server_{server_id}_members.json
+    ├── server_{server_id}_groups.json
+    ├── server_{server_id}_roles.json
+    ├── channel_{channel_id}_messages.json
+    └── channel_{channel_id}_pinned.json
 ```
 
 ## Channel Type Mappings
@@ -162,11 +217,17 @@ Guilded-specific permissions (docs, lists, scheduling, XP, etc.) are dropped as 
 
 ## Importing to Spacebar
 
-After exporting, you can import the data into Spacebar:
+**Important**: According to Spacebar developers, Spacebar does not currently have a built-in import feature. The recommended approach is:
 
-1. Locate your export directory (default: `./guilded-export`)
-2. Follow Spacebar's import documentation
-3. The export format matches Discord takeout structure
+1. Use the **Raw JSON format** to export your data
+2. The raw export preserves all Guilded fields without data loss
+3. Write a custom database importer for Spacebar using the raw JSON data
+4. This approach allows maximum flexibility without time pressure
+
+For Discord Takeout format:
+- The export structure mimics Discord takeout format
+- Can be used as reference for writing Spacebar importers
+- Useful for documentation and archival purposes
 
 **Note**: Spacebar supports non-snowflake IDs, so Guilded's UUIDs are preserved as-is.
 

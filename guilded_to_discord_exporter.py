@@ -99,10 +99,17 @@ class GuildedToDiscordExporter:
         "CanUseVoiceActivityInStream": 0x02000000, # USE_VAD
     }
     
-    def __init__(self, auth_token: str, output_dir: str):
-        """Initialize exporter with auth token and output directory"""
+    def __init__(self, auth_token: str, output_dir: str, export_format: str = "discord"):
+        """Initialize exporter with auth token and output directory
+        
+        Args:
+            auth_token: Guilded hmac_signed_session token
+            output_dir: Directory to save exported data
+            export_format: Export format - 'discord' (Discord takeout) or 'raw' (raw Guilded JSON)
+        """
         self.auth_token = auth_token
         self.output_dir = Path(output_dir)
+        self.export_format = export_format
         self.cookies = {
             "authenticated": "true",
             "hmac_signed_session": auth_token,
@@ -646,10 +653,161 @@ Exporter: GuildedChatExporter (Discord Takeout Format)
                         
         self.log(f"  Downloaded {downloaded}/{total_attachments} attachments")
     
-    def export_all(self, server_id: str, server_name: str):
-        """Export entire server"""
+    def export_all_raw(self, server_id: str, server_name: str):
+        """Export entire server in raw Guilded JSON format"""
         self.log("=" * 60)
-        self.log(f"Starting export of server: {server_name}")
+        self.log(f"Starting RAW export of server: {server_name}")
+        self.log("=" * 60)
+        
+        raw_dir = self.output_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            user_data = self.fetch("me", params={"isLogin": "false", "v2": "true"})
+            user_path = raw_dir / "user.json"
+            with open(user_path, 'w', encoding='utf-8') as f:
+                json.dump(user_data, f, indent=2)
+            self.log("Exported user data")
+        except Exception as e:
+            self.log(f"Could not export user data: {e}", "WARNING")
+        
+        try:
+            info_data = self.fetch(f"teams/{server_id}/info")
+            info_path = raw_dir / f"server_{server_id}_info.json"
+            with open(info_path, 'w', encoding='utf-8') as f:
+                json.dump(info_data, f, indent=2)
+            self.log("Exported server info")
+        except Exception as e:
+            self.log(f"Could not export server info: {e}", "WARNING")
+        
+        try:
+            channels_data = self.fetch(f"teams/{server_id}/channels")
+            channels_path = raw_dir / f"server_{server_id}_channels.json"
+            with open(channels_path, 'w', encoding='utf-8') as f:
+                json.dump(channels_data, f, indent=2)
+            self.log("Exported channels list")
+            
+            channels = channels_data.get("channels", [])
+            
+            for channel in channels:
+                channel_id = channel.get("id", "")
+                channel_name = channel.get("name", "untitled")
+                channel_type = channel.get("contentType", "chat")
+                
+                self.log(f"Exporting messages from #{channel_name} ({channel_type})")
+                
+                all_messages = []
+                before_id = None
+                page = 0
+                
+                while True:
+                    try:
+                        params = {}
+                        if before_id:
+                            params["beforeId"] = before_id
+                        
+                        messages_data = self.fetch(f"channels/{channel_id}/messages", params=params)
+                        messages = messages_data.get("messages", [])
+                        
+                        if not messages:
+                            break
+                        
+                        page += 1
+                        self.log(f"  Fetched page {page}, {len(messages)} messages")
+                        all_messages.extend(messages)
+                        
+                        if len(messages) < 50:
+                            break
+                        
+                        before_id = messages[-1].get("id")
+                        time.sleep(0.5)
+                        
+                    except Exception as e:
+                        self.log(f"Error fetching messages: {e}", "ERROR")
+                        break
+                
+                if all_messages:
+                    messages_path = raw_dir / f"channel_{channel_id}_messages.json"
+                    with open(messages_path, 'w', encoding='utf-8') as f:
+                        json.dump({
+                            "channel": channel,
+                            "messages": all_messages
+                        }, f, indent=2)
+                    self.log(f"  Exported {len(all_messages)} messages")
+                
+                try:
+                    pinned_data = self.fetch(f"channels/{channel_id}/messages/pinned")
+                    if pinned_data.get("messages"):
+                        pinned_path = raw_dir / f"channel_{channel_id}_pinned.json"
+                        with open(pinned_path, 'w', encoding='utf-8') as f:
+                            json.dump(pinned_data, f, indent=2)
+                        self.log(f"  Exported pinned messages")
+                except:
+                    pass
+                
+        except Exception as e:
+            self.log(f"Error exporting channels: {e}", "ERROR")
+        
+        try:
+            members_data = self.fetch(f"teams/{server_id}/members")
+            members_path = raw_dir / f"server_{server_id}_members.json"
+            with open(members_path, 'w', encoding='utf-8') as f:
+                json.dump(members_data, f, indent=2)
+            self.log("Exported members list")
+        except Exception as e:
+            self.log(f"Could not export members: {e}", "WARNING")
+        
+        try:
+            groups_data = self.fetch(f"teams/{server_id}/groups")
+            groups_path = raw_dir / f"server_{server_id}_groups.json"
+            with open(groups_path, 'w', encoding='utf-8') as f:
+                json.dump(groups_data, f, indent=2)
+            self.log("Exported groups")
+        except Exception as e:
+            self.log(f"Could not export groups: {e}", "WARNING")
+        
+        readme_content = f"""GUILDED RAW DATA EXPORT
+
+This export contains raw JSON responses from the Guilded API.
+
+Server: {server_name} ({server_id})
+Export Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+Files:
+- user.json - Your user data
+- server_*_info.json - Server information
+- server_*_channels.json - Channel list
+- channel_*_messages.json - Messages per channel
+- channel_*_pinned.json - Pinned messages per channel
+- server_*_members.json - Server members
+- server_*_groups.json - Server groups
+
+This raw data preserves all Guilded-specific fields and can be used to
+write custom importers for Spacebar or other platforms.
+
+IMPORTANT: Guilded.gg is shutting down on January 1, 2026.
+This export preserves your data before the shutdown.
+"""
+        readme_path = raw_dir / "README.txt"
+        with open(readme_path, 'w', encoding='utf-8') as f:
+            f.write(readme_content)
+        
+        self.log("=" * 60)
+        self.log("RAW export complete!")
+        self.log(f"Output directory: {raw_dir}")
+        self.log("=" * 60)
+    
+    def export_all(self, server_id: str, server_name: str):
+        """Export entire server (format depends on self.export_format)"""
+        if self.export_format == "raw":
+            self.export_all_raw(server_id, server_name)
+        else:
+            self.export_all_discord(server_id, server_name)
+    
+    def export_all_discord(self, server_id: str, server_name: str):
+        """Export entire server in Discord takeout format"""
+        self.log("=" * 60)
+        self.log(f"Starting DISCORD export of server: {server_name}")
         self.log("=" * 60)
         
         self.create_readme()
