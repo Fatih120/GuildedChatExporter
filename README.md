@@ -3,8 +3,10 @@
 Exports your dearest chats from Guilded to html files, along with downloading all attachments from said channels.
 
 ## [Click here to run the Chat Exporter through Google Colab.](https://colab.research.google.com/github/Fatih120/GuildedChatExporter/blob/main/guildedchatexporter.ipynb)
-### ⚠️This tool is in another WIP due to the announcement of Guilded getting killed, my lack of attention, and changes to Guilded's backend. Please, contact me to fix any bugs so we can save your stuff before then. Actually-smart coders are very welcome.
+### ⚠️This tool is complete enough to get the raw data of your servers and DMs for safekeeping, along with media, but it doesn't export all channel types to HTML yet. This will probebly be done *after* Guilded dies, so you should use this tool anyway before you can't anymore as this raw data can be processed post-mortem.
 Everything below is "old".
+
+There is a way to [run this locally without using Google](https://jupyter.org/install), which may help if you have HUGE servers to download or hate Google. This repo won't cover how to do that.
 
 <hr>
 
@@ -18,12 +20,6 @@ Just follow the instructions in the Colab. To do each step, click on the play bu
 
 ![image](https://github.com/user-attachments/assets/f9dc3036-c39d-42bf-9d0c-44a342bd1ab2)
 
-
-### todo
-idk its in the thing and idk if they'll get done (aside from downloading forum media and other stuff, max priority until nukage)
-
 # Contact and Support
 
-https://www.guilded.gg/i/2ZnlDm92
-https://www.guilded.gg/MoF
-https://discord.com/invite/Cy27FNfQtc
+Use the repo for issues or the like, or join this: https://discord.com/invite/bPA9MHphNg
