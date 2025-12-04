@@ -99,13 +99,14 @@ class GuildedToDiscordExporter:
         "CanUseVoiceActivityInStream": 0x02000000, # USE_VAD
     }
     
-    def __init__(self, auth_token: str, output_dir: str, export_format: str = "discord"):
+    def __init__(self, auth_token: str, output_dir: str, export_format: str = "discord", page_delay: float = None):
         """Initialize exporter with auth token and output directory
         
         Args:
             auth_token: Guilded hmac_signed_session token
             output_dir: Directory to save exported data
             export_format: Export format - 'discord' (Discord takeout) or 'raw' (raw Guilded JSON)
+            page_delay: Delay between page fetches in seconds (default: 0.5, can be overridden via GUILDED_EXPORT_DELAY_SECONDS env var)
         """
         self.auth_token = auth_token
         self.output_dir = Path(output_dir)
@@ -116,6 +117,12 @@ class GuildedToDiscordExporter:
         }
         self.session = requests.Session()
         self.session.cookies.update(self.cookies)
+        
+        # Configurable delay: parameter > env var > default (0.5s)
+        if page_delay is not None:
+            self.page_delay = page_delay
+        else:
+            self.page_delay = float(os.getenv("GUILDED_EXPORT_DELAY_SECONDS", "0.5"))
         
     def log(self, message: str, level: str = "INFO"):
         """Log a message with timestamp"""
@@ -505,7 +512,7 @@ Exporter: GuildedChatExporter (Discord Takeout Format)
                     break
                     
                 before_id = messages[-1].get("id")
-                time.sleep(0.5)
+                time.sleep(self.page_delay)
                 
             except Exception as e:
                 self.log(f"Error fetching messages for {channel_name}: {e}", "ERROR")

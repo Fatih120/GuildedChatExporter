@@ -8,6 +8,7 @@ import socketio
 import asyncio
 import json
 import time
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -20,12 +21,13 @@ class GuildedWebSocketExporter:
     WS_URL = "wss://www.guilded.gg/ws/"
     API_URL = "https://www.guilded.gg/api"
     
-    def __init__(self, auth_token: str, output_dir: str):
+    def __init__(self, auth_token: str, output_dir: str, page_delay: float = None):
         """Initialize WebSocket exporter
         
         Args:
             auth_token: Guilded hmac_signed_session token
             output_dir: Directory to save exported data
+            page_delay: Delay between page fetches in seconds (default: 0.5, can be overridden via GUILDED_EXPORT_DELAY_SECONDS env var)
         """
         self.auth_token = auth_token
         self.output_dir = Path(output_dir)
@@ -33,6 +35,12 @@ class GuildedWebSocketExporter:
             "authenticated": "true",
             "hmac_signed_session": auth_token,
         }
+        
+        # Configurable delay: parameter > env var > default (0.5s)
+        if page_delay is not None:
+            self.page_delay = page_delay
+        else:
+            self.page_delay = float(os.getenv("GUILDED_EXPORT_DELAY_SECONDS", "0.5"))
         
         self.sio = socketio.AsyncClient(
             logger=False,
@@ -179,7 +187,7 @@ class GuildedWebSocketExporter:
                 if cursor is None or len(channels) < 25:
                     break
                 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self.page_delay)
         
         self.logger.info(f"Found {len(dmlist)} DM/group DM channels total")
         return dmlist
@@ -252,11 +260,109 @@ class GuildedWebSocketExporter:
         self.logger.info(f"Output directory: {raw_dir / 'dms'}")
         self.logger.info("=" * 60)
     
-    async def export_channel_history(self, channel_id: str) -> List[Dict]:
-        """Export complete channel history using cursor rewinding
+    def _get_checkpoint_path(self, server_id: str) -> Path:
+        """Get path to checkpoint file for a server"""
+        raw_dir = self.output_dir / "raw_websocket"
+        return raw_dir / f"server_{server_id}_checkpoint.json"
+    
+    def _load_checkpoint(self, server_id: str) -> Optional[Dict]:
+        """Load checkpoint for a server if it exists"""
+        checkpoint_path = self._get_checkpoint_path(server_id)
+        if checkpoint_path.exists():
+            try:
+                with open(checkpoint_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                self.logger.warning(f"Could not load checkpoint: {e}")
+        return None
+    
+    def _save_checkpoint(self, server_id: str, checkpoint: Dict) -> None:
+        """Save checkpoint atomically (write to temp file then rename)"""
+        checkpoint_path = self._get_checkpoint_path(server_id)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        checkpoint["last_updated_at"] = datetime.now().isoformat()
+        
+        # Write atomically: temp file then rename
+        tmp_path = checkpoint_path.with_suffix('.json.tmp')
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(checkpoint, f, indent=2)
+        os.replace(tmp_path, checkpoint_path)
+    
+    def _save_page_file(self, raw_dir: Path, channel_id: str, page: int, messages: List[Dict]) -> None:
+        """Save a page of messages atomically"""
+        page_path = raw_dir / f"channel_{channel_id}_page_{page}.json"
+        tmp_path = page_path.with_suffix('.json.tmp')
+        
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(messages, f, indent=2)
+        os.replace(tmp_path, page_path)
+    
+    def _load_existing_pages(self, raw_dir: Path, channel_id: str) -> tuple[List[Dict], int, Optional[str]]:
+        """Load existing page files for a channel to resume export
+        
+        Returns:
+            Tuple of (all_messages, last_page_number, last_message_id)
+        """
+        all_messages = []
+        page = 0
+        last_message_id = None
+        
+        while True:
+            page_path = raw_dir / f"channel_{channel_id}_page_{page + 1}.json"
+            if not page_path.exists():
+                break
+            
+            try:
+                with open(page_path, 'r', encoding='utf-8') as f:
+                    page_messages = json.load(f)
+                all_messages.extend(page_messages)
+                page += 1
+                if page_messages:
+                    last_message_id = page_messages[-1].get("id")
+                self.logger.info(f"  Loaded existing page {page} ({len(page_messages)} messages)")
+            except Exception as e:
+                self.logger.warning(f"  Could not load page {page + 1}: {e}")
+                break
+        
+        return all_messages, page, last_message_id
+    
+    def _merge_and_cleanup_pages(self, raw_dir: Path, channel_id: str, channel: Dict, all_messages: List[Dict]) -> None:
+        """Merge page files into final messages.json and clean up page files"""
+        messages_path = raw_dir / f"channel_{channel_id}_messages.json"
+        
+        with open(messages_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "channel": channel,
+                "messages": all_messages,
+                "export_timestamp": datetime.now().isoformat(),
+                "total_messages": len(all_messages)
+            }, f, indent=2)
+        
+        # Clean up page files
+        page = 1
+        while True:
+            page_path = raw_dir / f"channel_{channel_id}_page_{page}.json"
+            if page_path.exists():
+                page_path.unlink()
+                page += 1
+            else:
+                break
+        
+        if page > 1:
+            self.logger.info(f"  Cleaned up {page - 1} page files")
+    
+    async def export_channel_history(self, channel_id: str, raw_dir: Path = None, 
+                                      channel: Dict = None, checkpoint: Dict = None,
+                                      server_id: str = None) -> List[Dict]:
+        """Export complete channel history using cursor rewinding with resume support
         
         Args:
             channel_id: Channel ID to export
+            raw_dir: Directory to save page files (optional, enables incremental saving)
+            channel: Channel metadata (optional, for final merge)
+            checkpoint: Checkpoint dict to update (optional)
+            server_id: Server ID for checkpoint saving (optional)
             
         Returns:
             List of all messages
@@ -266,6 +372,15 @@ class GuildedWebSocketExporter:
         all_messages = []
         before_id = None
         page = 0
+        
+        # Check for existing progress if raw_dir is provided
+        if raw_dir:
+            existing_messages, existing_pages, last_id = self._load_existing_pages(raw_dir, channel_id)
+            if existing_pages > 0:
+                all_messages = existing_messages
+                page = existing_pages
+                before_id = last_id
+                self.logger.info(f"  Resuming from page {page + 1}, {len(all_messages)} messages already fetched")
         
         async with aiohttp.ClientSession(cookies=self.cookies) as session:
             while True:
@@ -285,14 +400,30 @@ class GuildedWebSocketExporter:
                         break
                     
                     page += 1
-                    self.logger.info(f"  Page {page}: {len(messages)} messages")
+                    self.logger.info(f"  Page {page}: {len(messages)} messages (total: {len(all_messages) + len(messages)})")
                     all_messages.extend(messages)
+                    
+                    # Save page file incrementally if raw_dir is provided
+                    if raw_dir:
+                        self._save_page_file(raw_dir, channel_id, page, messages)
+                        
+                        # Update checkpoint
+                        if checkpoint and server_id:
+                            if "channels" not in checkpoint:
+                                checkpoint["channels"] = {}
+                            checkpoint["channels"][channel_id] = {
+                                "status": "in_progress",
+                                "pages_fetched": page,
+                                "messages_exported": len(all_messages),
+                                "last_message_id": messages[-1].get("id")
+                            }
+                            self._save_checkpoint(server_id, checkpoint)
                     
                     if len(messages) < 50:
                         break
                     
                     before_id = messages[-1].get("id")
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(self.page_delay)
                     
                 except Exception as e:
                     self.logger.error(f"Error fetching messages: {e}")
@@ -301,19 +432,40 @@ class GuildedWebSocketExporter:
         self.logger.info(f"  Total: {len(all_messages)} messages")
         return all_messages
     
-    async def export_server_full(self, server_id: str, server_name: str):
+    async def export_server_full(self, server_id: str, server_name: str, resume: bool = True):
         """Export complete server data using REST API cursor rewinding
         
         Args:
             server_id: Server/team ID
             server_name: Server/team name
+            resume: Whether to resume from checkpoint if available (default: True)
         """
         self.logger.info("=" * 60)
         self.logger.info(f"Starting WebSocket RAW export of: {server_name}")
+        self.logger.info(f"Page delay: {self.page_delay}s (set GUILDED_EXPORT_DELAY_SECONDS to adjust)")
         self.logger.info("=" * 60)
         
         raw_dir = self.output_dir / "raw_websocket"
         raw_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load or create checkpoint
+        checkpoint = None
+        if resume:
+            checkpoint = self._load_checkpoint(server_id)
+            if checkpoint:
+                done_count = sum(1 for c in checkpoint.get("channels", {}).values() if c.get("status") == "done")
+                in_progress = [cid for cid, c in checkpoint.get("channels", {}).items() if c.get("status") == "in_progress"]
+                self.logger.info(f"Resuming from checkpoint: {done_count} channels done, {len(in_progress)} in progress")
+        
+        if not checkpoint:
+            checkpoint = {
+                "version": 1,
+                "server_id": server_id,
+                "server_name": server_name,
+                "export_format": "raw",
+                "created_at": datetime.now().isoformat(),
+                "channels": {}
+            }
         
         try:
             self.logger.info("Fetching user data...")
@@ -350,20 +502,44 @@ class GuildedWebSocketExporter:
                 channel_name = channel.get("name", "untitled")
                 channel_type = channel.get("contentType", "chat")
                 
+                # Check if channel is already done in checkpoint
+                channel_status = checkpoint.get("channels", {}).get(channel_id, {})
+                if channel_status.get("status") == "done":
+                    # Also check if final messages.json exists
+                    messages_path = raw_dir / f"channel_{channel_id}_messages.json"
+                    if messages_path.exists():
+                        self.logger.info(f"[{idx}/{len(channels)}] Skipping #{channel_name} (already exported)")
+                        continue
+                
                 self.logger.info(f"[{idx}/{len(channels)}] Exporting #{channel_name} ({channel_type})")
                 
-                messages = await self.export_channel_history(channel_id)
+                # Use checkpoint-aware export
+                messages = await self.export_channel_history(
+                    channel_id, 
+                    raw_dir=raw_dir, 
+                    channel=channel,
+                    checkpoint=checkpoint,
+                    server_id=server_id
+                )
                 
                 if messages:
-                    messages_path = raw_dir / f"channel_{channel_id}_messages.json"
-                    with open(messages_path, 'w', encoding='utf-8') as f:
-                        json.dump({
-                            "channel": channel,
-                            "messages": messages,
-                            "export_timestamp": datetime.now().isoformat(),
-                            "total_messages": len(messages)
-                        }, f, indent=2)
+                    # Merge page files into final messages.json and clean up
+                    self._merge_and_cleanup_pages(raw_dir, channel_id, channel, messages)
                     self.logger.info(f"  ✓ Exported {len(messages)} messages")
+                    
+                    # Mark channel as done in checkpoint
+                    checkpoint["channels"][channel_id] = {
+                        "status": "done",
+                        "messages_exported": len(messages)
+                    }
+                    self._save_checkpoint(server_id, checkpoint)
+                else:
+                    # Mark empty channel as done
+                    checkpoint["channels"][channel_id] = {
+                        "status": "done",
+                        "messages_exported": 0
+                    }
+                    self._save_checkpoint(server_id, checkpoint)
                 
                 try:
                     async with aiohttp.ClientSession(cookies=self.cookies) as session:
