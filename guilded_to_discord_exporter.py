@@ -372,6 +372,9 @@ Export created: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 Exporter: GuildedChatExporter (Discord Takeout Format)
 """
         
+        # Ensure output directory exists before writing README
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
         readme_path = self.output_dir / "README.txt"
         with open(readme_path, 'w', encoding='utf-8') as f:
             f.write(readme_content)
