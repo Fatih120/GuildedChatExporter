@@ -139,6 +139,119 @@ class GuildedWebSocketExporter:
                 response.raise_for_status()
                 return await response.json()
     
+    async def fetch_dm_channels(self, user_id: str) -> List[Dict]:
+        """Fetch all DM and group DM channels for a user
+        
+        Args:
+            user_id: User ID to fetch DMs for
+            
+        Returns:
+            List of DM channel objects
+        """
+        self.logger.info("Fetching DM channels...")
+        dmlist: List[Dict] = []
+        cursor = None
+        
+        async with aiohttp.ClientSession(cookies=self.cookies) as session:
+            while True:
+                params = {"maxItems": "25", "useEnhancedPagination": "false"}
+                if cursor is not None:
+                    params["cursor"] = cursor
+                
+                url = f"{self.API_URL}/users/{user_id}/channels"
+                async with session.get(url, params=params) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                
+                channels = data.get("channels", [])
+                if not channels:
+                    break
+                
+                dmlist.extend(channels)
+                self.logger.info(f"  Fetched {len(dmlist)} DM channels so far...")
+                
+                last = channels[-1]
+                cursor = (
+                    last.get("createdAt")
+                    or last.get("updatedAt")
+                    or (last.get("lastMessage") or {}).get("createdAt")
+                )
+                if cursor is None or len(channels) < 25:
+                    break
+                
+                await asyncio.sleep(0.5)
+        
+        self.logger.info(f"Found {len(dmlist)} DM/group DM channels total")
+        return dmlist
+    
+    async def export_dm_channel(self, channel: Dict, raw_dir: Path) -> None:
+        """Export a single DM channel's messages
+        
+        Args:
+            channel: DM channel object
+            raw_dir: Directory to save exported data
+        """
+        channel_id = channel.get("id", "")
+        channel_name = channel.get("name", "untitled")
+        
+        self.logger.info(f"Exporting DM: {channel_name} ({channel_id})")
+        
+        messages = await self.export_channel_history(channel_id)
+        if not messages:
+            self.logger.info(f"  No messages in this DM")
+            return
+        
+        dm_dir = raw_dir / "dms"
+        dm_dir.mkdir(parents=True, exist_ok=True)
+        
+        messages_path = dm_dir / f"dm_{channel_id}_messages.json"
+        with open(messages_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "channel": channel,
+                "messages": messages,
+                "export_timestamp": datetime.now().isoformat(),
+                "total_messages": len(messages)
+            }, f, indent=2)
+        self.logger.info(f"  Exported {len(messages)} messages")
+    
+    async def export_all_dms(self, user_id: str) -> None:
+        """Export all DM and group DM channels
+        
+        Args:
+            user_id: User ID to export DMs for
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("Starting DM export")
+        self.logger.info("=" * 60)
+        
+        raw_dir = self.output_dir / "raw_websocket"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        
+        dm_channels = await self.fetch_dm_channels(user_id)
+        
+        if not dm_channels:
+            self.logger.info("No DM channels found")
+            return
+        
+        dm_index_path = raw_dir / "dms" / "dm_channels_index.json"
+        dm_index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dm_index_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "channels": dm_channels,
+                "total_channels": len(dm_channels),
+                "export_timestamp": datetime.now().isoformat()
+            }, f, indent=2)
+        self.logger.info(f"Saved DM channels index ({len(dm_channels)} channels)")
+        
+        for idx, channel in enumerate(dm_channels, 1):
+            self.logger.info(f"[{idx}/{len(dm_channels)}] Processing DM channel")
+            await self.export_dm_channel(channel, raw_dir)
+        
+        self.logger.info("=" * 60)
+        self.logger.info("DM export complete!")
+        self.logger.info(f"Output directory: {raw_dir / 'dms'}")
+        self.logger.info("=" * 60)
+    
     async def export_channel_history(self, channel_id: str) -> List[Dict]:
         """Export complete channel history using cursor rewinding
         
