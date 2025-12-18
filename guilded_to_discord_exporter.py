@@ -640,6 +640,162 @@ Exporter: GuildedChatExporter (Discord Takeout Format)
         """Extract role mentions from content"""
         return []
     
+    def fetch_channel_threads(self, channel_id: str) -> List[Dict]:
+        """Fetch all threads (active and archived) for a channel
+        
+        Args:
+            channel_id: Channel ID to fetch threads for
+            
+        Returns:
+            List of thread objects
+        """
+        all_threads = []
+        
+        for status in ["active", "archived"]:
+            cursor = None
+            while True:
+                params = {
+                    "status": status,
+                    "maxItems": "50",
+                    "maxUsers": "10"
+                }
+                if cursor:
+                    params["beforeDate"] = cursor
+                
+                try:
+                    data = self.fetch(f"channels/{channel_id}/threads", params=params)
+                    threads_batch = data.get("threads", [])
+                    
+                    if not threads_batch:
+                        break
+                    
+                    all_threads.extend(threads_batch)
+                    
+                    if len(threads_batch) < 50:
+                        break
+                    
+                    cursor = threads_batch[-1].get("createdAt")
+                    time.sleep(self.page_delay)
+                    
+                except Exception as e:
+                    self.log(f"Error fetching threads for {channel_id}: {e}", "DEBUG")
+                    break
+        
+        return all_threads
+    
+    def export_thread_messages(self, thread: Dict, channel_dir: Path) -> int:
+        """Export messages from a single thread
+        
+        Args:
+            thread: Thread object
+            channel_dir: Parent channel directory
+            
+        Returns:
+            Number of messages exported
+        """
+        thread_id = thread.get("id", "")
+        thread_name = thread.get("name", "Untitled")
+        
+        threads_dir = channel_dir / "threads"
+        threads_dir.mkdir(parents=True, exist_ok=True)
+        
+        thread_dir = threads_dir / thread_id
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save thread metadata as channel.json (Discord format)
+        thread_channel = {
+            "id": thread_id,
+            "type": 11,  # GUILD_PUBLIC_THREAD
+            "name": thread_name,
+            "parent_id": thread.get("channelId", ""),
+            "guild": {
+                "id": thread.get("teamId", ""),
+                "name": ""
+            }
+        }
+        
+        channel_json_path = thread_dir / "channel.json"
+        with open(channel_json_path, 'w', encoding='utf-8') as f:
+            json.dump(thread_channel, f, indent=2)
+        
+        # Fetch thread messages
+        all_messages = []
+        before_date = None
+        
+        while True:
+            try:
+                params = {"limit": "100"}
+                if before_date:
+                    params["beforeDate"] = before_date
+                
+                data = self.fetch(f"channels/{thread_id}/messages", params=params)
+                messages = data.get("messages", [])
+                
+                if not messages:
+                    break
+                
+                for msg in messages:
+                    discord_msg = self._convert_message(msg, thread_id)
+                    all_messages.append(discord_msg)
+                
+                if len(messages) < 100:
+                    break
+                
+                before_date = messages[-1].get("createdAt")
+                time.sleep(self.page_delay)
+                
+            except Exception as e:
+                self.log(f"Error fetching messages for thread {thread_id}: {e}", "ERROR")
+                break
+        
+        # Reverse to get chronological order
+        all_messages.reverse()
+        
+        # Save messages
+        messages_json_path = thread_dir / "messages.json"
+        with open(messages_json_path, 'w', encoding='utf-8') as f:
+            json.dump(all_messages, f, indent=2)
+        
+        # Download attachments
+        self._download_message_attachments(all_messages, thread_dir)
+        
+        return len(all_messages)
+    
+    def export_channel_threads(self, channel_id: str, channel_name: str, channel_type: str) -> int:
+        """Export all threads for a channel
+        
+        Args:
+            channel_id: Channel ID
+            channel_name: Channel name for logging
+            channel_type: Channel content type
+            
+        Returns:
+            Total number of threads exported
+        """
+        # Only export threads for channel types that support them
+        if channel_type not in ["chat", "stream", "voice"]:
+            return 0
+        
+        threads = self.fetch_channel_threads(channel_id)
+        
+        if not threads:
+            return 0
+        
+        self.log(f"  Found {len(threads)} threads in #{channel_name}")
+        
+        channel_dir = self.output_dir / "messages" / f"c{channel_id}"
+        
+        total_messages = 0
+        for idx, thread in enumerate(threads, 1):
+            thread_name = thread.get("name", "Untitled")
+            self.log(f"    [{idx}/{len(threads)}] Exporting thread: {thread_name}")
+            
+            msg_count = self.export_thread_messages(thread, channel_dir)
+            total_messages += msg_count
+            self.log(f"      Exported {msg_count} messages")
+        
+        return len(threads)
+
     def _download_message_attachments(self, messages: List[Dict], channel_dir: Path):
         """Download all attachments from messages"""
         attachments_dir = channel_dir / "attachments"
@@ -835,6 +991,12 @@ This export preserves your data before the shutdown.
         for channel_id, channel_info in channel_map.items():
             try:
                 self.export_messages(channel_id, channel_info)
+                # Export threads for this channel
+                channel_name = channel_info["discord_channel"]["name"]
+                channel_type = channel_info["guilded_type"]
+                thread_count = self.export_channel_threads(channel_id, channel_name, channel_type)
+                if thread_count > 0:
+                    self.log(f"  Exported {thread_count} threads from #{channel_name}")
             except Exception as e:
                 channel_name = channel_info["discord_channel"]["name"]
                 self.log(f"Error exporting messages from #{channel_name}: {e}", "ERROR")

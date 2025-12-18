@@ -20,6 +20,7 @@ Converts Guilded data to Discord-compatible format for potential Spacebar import
 - ✅ Exports reactions (if available)
 - ✅ Marks pinned messages
 - ✅ Converts permissions to Discord bitmasks
+- ✅ **Exports reply threads** (not forum threads) with full message history
 
 ### 2. Raw JSON Format (Recommended)
 Saves raw Guilded API responses with complete message history using cursor rewinding.
@@ -30,6 +31,7 @@ Saves raw Guilded API responses with complete message history using cursor rewin
 - ✅ No data loss from conversion
 - ✅ Suitable for custom importers
 - ✅ All metadata preserved exactly as received from Guilded
+- ✅ **Exports reply threads** (active and archived) with full message history
 
 ## Requirements
 
@@ -131,7 +133,11 @@ guilded-export/
 │   └── c{channel_id}/
 │       ├── channel.json
 │       ├── messages.json
-│       └── attachments/
+│       ├── attachments/
+│       └── threads/              # Reply threads (if any)
+│           └── {thread_id}/
+│               ├── channel.json
+│               └── messages.json
 └── servers/{guild_id}/
     ├── guild.json
     └── audit-log.json
@@ -150,7 +156,13 @@ guilded-export/
     ├── server_{server_id}_groups.json
     ├── server_{server_id}_roles.json
     ├── channel_{channel_id}_messages.json
-    └── channel_{channel_id}_pinned.json
+    ├── channel_{channel_id}_pinned.json
+    └── channel_{channel_id}/           # Per-channel directory
+        └── threads/                    # Reply threads (if any)
+            ├── {channel_id}_threads_metadata.json
+            └── {thread_id}/
+                ├── {thread_id}_info.json
+                └── {thread_id}_messages.json
 ```
 
 ## Channel Type Mappings

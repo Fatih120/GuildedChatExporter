@@ -352,6 +352,164 @@ class GuildedWebSocketExporter:
         if page > 1:
             self.logger.info(f"  Cleaned up {page - 1} page files")
     
+    async def fetch_channel_threads(self, channel_id: str) -> List[Dict]:
+        """Fetch all threads (active and archived) for a channel
+        
+        Args:
+            channel_id: Channel ID to fetch threads for
+            
+        Returns:
+            List of thread objects
+        """
+        all_threads = []
+        
+        async with aiohttp.ClientSession(cookies=self.cookies) as session:
+            for status in ["active", "archived"]:
+                cursor = None
+                while True:
+                    params = {
+                        "status": status,
+                        "maxItems": "50",
+                        "maxUsers": "10"
+                    }
+                    if cursor:
+                        params["beforeDate"] = cursor
+                    
+                    try:
+                        url = f"{self.API_URL}/channels/{channel_id}/threads"
+                        async with session.get(url, params=params) as response:
+                            if response.status != 200:
+                                break
+                            data = await response.json()
+                        
+                        threads_batch = data.get("threads", [])
+                        if not threads_batch:
+                            break
+                        
+                        all_threads.extend(threads_batch)
+                        
+                        if len(threads_batch) < 50:
+                            break
+                        
+                        cursor = threads_batch[-1].get("createdAt")
+                        await asyncio.sleep(self.page_delay)
+                        
+                    except Exception as e:
+                        self.logger.debug(f"Error fetching threads for {channel_id}: {e}")
+                        break
+        
+        return all_threads
+    
+    async def export_thread(self, thread: Dict, threads_dir: Path) -> int:
+        """Export a single thread's messages
+        
+        Args:
+            thread: Thread object
+            threads_dir: Directory to save thread data
+            
+        Returns:
+            Number of messages exported
+        """
+        thread_id = thread.get("id", "")
+        thread_name = thread.get("name", "Untitled")
+        
+        thread_dir = threads_dir / thread_id
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save thread metadata
+        info_path = thread_dir / f"{thread_id}_info.json"
+        with open(info_path, 'w', encoding='utf-8') as f:
+            json.dump(thread, f, indent=2)
+        
+        # Fetch thread messages using the same cursor-based pagination
+        messages = []
+        before_date = None
+        
+        async with aiohttp.ClientSession(cookies=self.cookies) as session:
+            while True:
+                params = {"limit": "100"}
+                if before_date:
+                    params["beforeDate"] = before_date
+                
+                try:
+                    url = f"{self.API_URL}/channels/{thread_id}/messages"
+                    async with session.get(url, params=params) as response:
+                        if response.status != 200:
+                            break
+                        data = await response.json()
+                    
+                    batch = data.get("messages", [])
+                    messages.extend(batch)
+                    
+                    if len(batch) < 100:
+                        break
+                    
+                    before_date = batch[-1].get("createdAt")
+                    await asyncio.sleep(self.page_delay)
+                    
+                except Exception as e:
+                    self.logger.error(f"Error fetching messages for thread {thread_id}: {e}")
+                    break
+        
+        # Reverse to get chronological order
+        messages.reverse()
+        
+        # Save messages
+        messages_path = thread_dir / f"{thread_id}_messages.json"
+        with open(messages_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "thread": thread,
+                "messages": messages,
+                "export_timestamp": datetime.now().isoformat(),
+                "total_messages": len(messages)
+            }, f, indent=2)
+        
+        return len(messages)
+    
+    async def export_channel_threads(self, channel_id: str, channel_name: str, 
+                                      channel_dir: Path) -> int:
+        """Export all threads for a channel
+        
+        Args:
+            channel_id: Channel ID
+            channel_name: Channel name for logging
+            channel_dir: Directory where channel data is stored
+            
+        Returns:
+            Total number of threads exported
+        """
+        threads = await self.fetch_channel_threads(channel_id)
+        
+        if not threads:
+            return 0
+        
+        self.logger.info(f"  Found {len(threads)} threads in #{channel_name}")
+        
+        threads_dir = channel_dir / "threads"
+        threads_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save threads metadata
+        metadata_path = threads_dir / f"{channel_id}_threads_metadata.json"
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "channel_id": channel_id,
+                "threads": threads,
+                "total_threads": len(threads),
+                "export_timestamp": datetime.now().isoformat()
+            }, f, indent=2)
+        
+        total_messages = 0
+        for idx, thread in enumerate(threads, 1):
+            thread_id = thread.get("id", "")
+            thread_name = thread.get("name", "Untitled")
+            self.logger.info(f"    [{idx}/{len(threads)}] Exporting thread: {thread_name}")
+            
+            msg_count = await self.export_thread(thread, threads_dir)
+            total_messages += msg_count
+            self.logger.info(f"      Exported {msg_count} messages")
+        
+        return len(threads)
+
     async def export_channel_history(self, channel_id: str, raw_dir: Path = None, 
                                       channel: Dict = None, checkpoint: Dict = None,
                                       server_id: str = None) -> List[Dict]:
@@ -555,6 +713,19 @@ class GuildedWebSocketExporter:
                 except Exception as e:
                     self.logger.debug(f"  No pinned messages: {e}")
                 
+                # Export threads for channels that support them (chat, stream, voice)
+                if channel_type in ["chat", "stream", "voice"]:
+                    try:
+                        channel_dir = raw_dir / f"channel_{channel_id}"
+                        channel_dir.mkdir(parents=True, exist_ok=True)
+                        thread_count = await self.export_channel_threads(
+                            channel_id, channel_name, channel_dir
+                        )
+                        if thread_count > 0:
+                            self.logger.info(f"  ✓ Exported {thread_count} threads")
+                    except Exception as e:
+                        self.logger.debug(f"  No threads or error: {e}")
+                
         except Exception as e:
             self.logger.error(f"Failed to export channels: {e}")
         
@@ -603,6 +774,7 @@ Files:
 - server_*_channels.json - Complete channel list
 - channel_*_messages.json - Complete message history per channel (cursor rewound)
 - channel_*_pinned.json - Pinned messages per channel
+- channel_*/threads/ - Thread messages for each channel (if any)
 - server_*_members.json - Server members
 - server_*_groups.json - Server groups/categories
 - server_*_roles.json - Server roles and permissions
